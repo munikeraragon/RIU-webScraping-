@@ -1,8 +1,90 @@
 const puppeteer = require('puppeteer');
 
+// Helper function to get next Friday from a given date
+function getNextFriday(date) {
+    const result = new Date(date);
+    const daysUntilFriday = (5 - result.getDay() + 7) % 7;
+    if (daysUntilFriday === 0 && result.getDay() === 5) {
+        result.setDate(result.getDate() + 7); // If today is Friday, get next Friday
+    } else {
+        result.setDate(result.getDate() + daysUntilFriday);
+    }
+    return result;
+}
+
+// Generate Friday check-in dates for a month
+function generateFridayDates() {
+    const dates = [];
+    const today = new Date();
+    let currentFriday = getNextFriday(today);
+    
+    for (let i = 0; i < 4; i++) { // 4 weeks
+        const checkIn = new Date(currentFriday);
+        const checkOut = new Date(currentFriday);
+        checkOut.setDate(checkOut.getDate() + 7); // Next Friday
+        
+        dates.push({
+            checkIn: checkIn,
+            checkOut: checkOut,
+            checkInDay: checkIn.getDate(),
+            checkOutDay: checkOut.getDate()
+        });
+        
+        currentFriday.setDate(currentFriday.getDate() + 7); // Move to next Friday
+    }
+    return dates;
+}
+
+async function searchHotelPrice(page, checkInDay, checkOutDay) {
+    // Click datepicker
+    await page.click('#datepicker-field');
+    await page.waitForTimeout(2000);
+
+    // Select check-in date
+    await page.evaluate((day) => {
+        const dayButtons = Array.from(document.querySelectorAll('.riu-datepicker__item--day'));
+        const dayButton = dayButtons.find(button => {
+            const span = button.querySelector('span');
+            return span && span.textContent.trim() === day.toString() && 
+                   !button.classList.contains('riu-datepicker__item--disabled') &&
+                   !button.classList.contains('riu-datepicker__item--otherMonth');
+        });
+        if (dayButton) dayButton.click();
+    }, checkInDay);
+    
+    await page.waitForTimeout(1000);
+
+    // Select check-out date
+    await page.evaluate((day) => {
+        const dayButtons = Array.from(document.querySelectorAll('.riu-datepicker__item--day'));
+        const dayButton = dayButtons.find(button => {
+            const span = button.querySelector('span');
+            return span && span.textContent.trim() === day.toString() && 
+                   !button.classList.contains('riu-datepicker__item--disabled') &&
+                   !button.classList.contains('riu-datepicker__item--otherMonth');
+        });
+        if (dayButton) dayButton.click();
+    }, checkOutDay);
+
+    await page.waitForTimeout(1000);
+
+    // Click search
+    await page.click('#search-button');
+    await page.waitForTimeout(5000);
+
+    // Get price
+    try {
+        await page.waitForSelector('.riu-card-hotel__price-box__content__price', { timeout: 15000 });
+        const price = await page.$eval('.riu-card-hotel__price-box__content__price', el => el.textContent.trim());
+        return price;
+    } catch (error) {
+        return 'Price not found';
+    }
+}
+
 async function riuHotelSearch() {
     const browser = await puppeteer.launch({
-        headless: false, // Set to true if you want to run without opening browser window
+        headless: false,
         defaultViewport: null,
         args: ['--start-maximized']
     });
@@ -16,190 +98,73 @@ async function riuHotelSearch() {
             timeout: 30000
         });
 
-        // Handle cookie consent first
-        console.log('Looking for cookie consent banner...');
+        // Handle cookie consent
         try {
             await page.waitForSelector('#onetrust-accept-btn-handler', { timeout: 5000 });
             await page.click('#onetrust-accept-btn-handler');
             await page.waitForTimeout(2000);
-            console.log('Cookies accepted successfully!');
+            console.log('Cookie banner accepted');
         } catch (error) {
-            console.log('No cookie banner found or already accepted');
+            console.log('No cookie banner found');
         }
 
-        // Wait for the search input to be visible
+        // Setup hotel selection
         await page.waitForSelector('#searchInputDestination', { timeout: 10000 });
-
-        // Click on the search input field to open the destination selector
-        console.log('Clicking on search input field...');
         await page.click('#searchInputDestination');
-
-        // Wait for the destination tree to appear
         await page.waitForTimeout(3000);
+        console.log('Search input clicked');
 
-        // Step 1: Click on USA button
-        try {
-            await page.waitForSelector('span.riu-button__html-content', { timeout: 10000 });
-            
-            // Find and click the USA button
-            await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('span.riu-button__html-content'));
-                const usaButton = buttons.find(button => button.textContent.trim() === 'USA');
-                if (usaButton) {
-                    usaButton.click();
-                } else {
-                    throw new Error('USA button not found');
-                }
-            });
+        // Select USA
+        await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('span.riu-button__html-content'));
+            const usaButton = buttons.find(button => button.textContent.trim() === 'USA');
+            if (usaButton) usaButton.click();
+        });
+        await page.waitForTimeout(2000);
 
-            console.log('USA button selected successfully!');
-            await page.waitForTimeout(2000);
-        } catch (error) {
-            console.error('Error selecting USA:', error);
-        }
+        // Select Miami Beach
+        await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('span.riu-button__html-content'));
+            const miamiButton = buttons.find(button => button.textContent.includes('Miami Beach'));
+            if (miamiButton) miamiButton.click();
+        });
+        await page.waitForTimeout(2000);
 
-        // Step 2: Click on Miami Beach destination
-        try {
-            await page.waitForTimeout(2000);
-            
-            // Find and click Miami Beach destination
-            await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('span.riu-button__html-content'));
-                const miamiButton = buttons.find(button => 
-                    button.textContent.includes('Miami Beach')
-                );
-                if (miamiButton) {
-                    miamiButton.click();
-                } else {
-                    throw new Error('Miami Beach button not found');
-                }
-            });
-            
-            console.log('Miami Beach button selected successfully!');
-            await page.waitForTimeout(2000);
-        } catch (error) {
-            console.error('Error selecting Miami Beach:', error);
-        }
+        // Select Hotel RIU Plaza Miami Beach
+        await page.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll('span.riu-button__html-content'));
+            const riuPlazaButton = buttons.find(button => button.textContent.includes('Hotel Riu Plaza Miami Beach'));
+            if (riuPlazaButton) riuPlazaButton.click();
+        });
+        await page.waitForTimeout(2000);
 
-        // Step 3: Click on Hotel RIU Plaza Miami Beach
-        try {
-            await page.waitForTimeout(2000);
-            
-            // Find and click the RIU Plaza Miami Beach hotel
-            await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('span.riu-button__html-content'));
-                const riuPlazaButton = buttons.find(button => 
-                    button.textContent.includes('Hotel Riu Plaza Miami Beach')
-                );
-                if (riuPlazaButton) {
-                    riuPlazaButton.click();
-                } else {
-                    throw new Error('Hotel Riu Plaza Miami Beach button not found');
-                }
-            });
-            
-            console.log('Hotel RIU Plaza Miami Beach button selected successfully!');
-            await page.waitForTimeout(2000);
-        } catch (error) {
-            console.error('Error selecting Hotel RIU Plaza Miami Beach:', error);
-        }
+        // Get Friday dates for a month
+        const fridayDates = generateFridayDates();
+        const prices = [];
 
-        // Step 4: Click on the datepicker to select dates
-        console.log('Opening calendar...');
-        try {
-            await page.waitForSelector('#datepicker-field', { timeout: 10000 });
-            await page.click('#datepicker-field');
-            await page.waitForTimeout(2000);
-            console.log('Calendar opened successfully!');
-        } catch (error) {
-            console.error('Error opening calendar:', error);
-        }
-
-        // Step 5: Select September 25 as check-in date
-        console.log('Selecting September 25 as check-in date...');
-        try {
-            await page.waitForSelector('.riu-datepicker__item--day', { timeout: 5000 });
-            
-            // Find and click September 25
-            await page.evaluate(() => {
-                const dayButtons = Array.from(document.querySelectorAll('.riu-datepicker__item--day'));
-                const sept25Button = dayButtons.find(button => {
-                    const span = button.querySelector('span');
-                    return span && span.textContent.trim() === '25' && 
-                           !button.classList.contains('riu-datepicker__item--disabled') &&
-                           !button.classList.contains('riu-datepicker__item--otherMonth');
-                });
-                if (sept25Button) {
-                    sept25Button.click();
-                } else {
-                    throw new Error('September 25 not found');
-                }
-            });
-            
-            await page.waitForTimeout(1000);
-            console.log('Check-in date selected successfully!');
-        } catch (error) {
-            console.error('Error selecting September 25:', error);
-        }
-
-        // Step 6: Select October 3 as check-out date
-        console.log('Selecting October 3 as check-out date...');
-        try {
-            await page.waitForTimeout(1000);
-            
-            // Find and click October 3
-            await page.evaluate(() => {
-                const dayButtons = Array.from(document.querySelectorAll('.riu-datepicker__item--day'));
-                const oct3Button = dayButtons.find(button => {
-                    const span = button.querySelector('span');
-                    return span && span.textContent.trim() === '3' && 
-                           !button.classList.contains('riu-datepicker__item--disabled') &&
-                           !button.classList.contains('riu-datepicker__item--otherMonth');
-                });
-                if (oct3Button) {
-                    oct3Button.click();
-                } else {
-                    throw new Error('October 3 not found');
-                }
-            });
-            
-            await page.waitForTimeout(1000);
-            console.log('Check-out date selected successfully!');
-        } catch (error) {
-            console.error('Error selecting October 3:', error);
-        }
-
-        // Step 7: Click the Search button
-        console.log('Clicking Search button...');
-        try {
-            await page.waitForSelector('#search-button', { timeout: 10000 });
-            await page.click('#search-button');
-            console.log('Search button clicked successfully!');
-            
-            // Wait for search results to load
-            await page.waitForTimeout(5000);
-        } catch (error) {
-            console.error('Error clicking Search button:', error);
-        }
-
-        // Step 8: Scrape the hotel price
-        console.log('Scraping hotel price...');
-        try {
-            // Wait for price element to appear
-            await page.waitForSelector('.riu-card-hotel__price-box__content__price', { timeout: 15000 });
-            
-            // Extract the full price text
-            const fullPrice = await page.$eval('.riu-card-hotel__price-box__content__price', el => el.textContent.trim());
-            
-            console.log('=== ✅ Price scraped successfully! ===');
-            console.log(`Hotel Price: ${fullPrice}`);
-            
-        } catch (error) {
-            console.error('Error scraping price:', error);
-        }
         
-        // Keep browser open for 10 seconds to see results
-        await page.waitForTimeout(10000);
+        // Loop through each Friday-to-Friday period
+        for (let i = 0; i < fridayDates.length; i++) {
+            const { checkIn, checkOut, checkInDay, checkOutDay } = fridayDates[i];
+            
+            const price = await searchHotelPrice(page, checkInDay, checkOutDay);
+            
+            prices.push({
+                checkIn: checkIn.toDateString(),
+                checkOut: checkOut.toDateString(),
+                price: price
+            });
+            
+            console.log(`Price: ${price}`);
+        }
+
+        // Display all results
+        console.log('\n=== HOTEL PRICING SCRAPING COMPLETE ===');
+        prices.forEach((entry, index) => {
+            console.log(`Week ${index + 1}: ${entry.checkIn} to ${entry.checkOut} - ${entry.price}`);
+        });
+
+        await page.waitForTimeout(5000);
 
     } catch (error) {
         console.error('An error occurred:', error);
